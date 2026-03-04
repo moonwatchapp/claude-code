@@ -1,0 +1,14 @@
+{
+  "name": "moonwatch",
+  "owner": {
+    "name": "Moonwatch",
+    "url": "https://moonwatch.dev"
+  },
+  "plugins": [
+    {
+      "name": "moonwatch",
+      "source": "./",
+      "description": "AI-powered log analysis and debugging. Gives Claude persistent runtime insight via structured logging, MCP-powered log queries, and watchers for tracking investigations across conversations."
+    }
+  ]
+}

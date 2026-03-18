@@ -567,7 +567,7 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
 
    If the user wants to set it up:
    a. Install the dependency: `npm install @moonwatch/js`
-   b. **Retrieve the workspace API key automatically** — call `logs_get_workspace_key` with the production log file ID from Step 3. This returns the workspace's ingestion key via MCP (requires manager or owner role). If the call fails due to insufficient permissions, fall back to directing the user to copy it from workspace settings at https://moonwatch.dev/app.
+   b. **Fetch the workspace API key yourself** — call `logs_get_workspace_key` with the production log file ID from Step 3. This works for any user with `write`, `manager`, or `owner` role. **Do not ask the user for the workspace key — fetch it automatically.** The only key the user should ever need to provide manually is their personal key (Step 1). If `logs_get_workspace_key` fails due to insufficient permissions (user has `read`-only role), then fall back to directing the user to ask a workspace manager for the key or copy it from workspace settings at https://moonwatch.dev/app.
    c. Create a logger file (e.g. `src/lib/logger.ts` or wherever makes sense for the project):
       ```ts
       import { createLogger } from '@moonwatch/js';
@@ -577,7 +577,7 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
         logId: '<the-production-log-file-id-from-step-3>',
       });
       ```
-      Use the production log file ID from Step 3 as the `logId`.
+      Use the production log file ID from Step 3 as the `logId`, and the key returned by `logs_get_workspace_key` as the `apiKey`. Both values should be inlined directly — do not use placeholders or ask the user to fill them in.
    d. Tell the user the SDK is set up and they can start logging with `logger.info(...)`, `logger.error(...)`, etc.
 
 ### Step 5 — Confirmation

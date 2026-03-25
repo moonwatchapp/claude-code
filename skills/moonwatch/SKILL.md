@@ -356,6 +356,44 @@ Use `withTraceId()` to correlate logs across a single request or operation, espe
 
 ---
 
+## CLI for Non-JS Environments
+
+When you need to log from shell scripts, cron jobs, build pipelines, or any non-JavaScript context, use the `moonwatch` CLI instead of the JS SDK. It's part of the same `@moonwatch/js` package.
+
+**Prerequisites:** The CLI reads `MOONWATCH_API_KEY` (workspace key) and `MOONWATCH_LOG_FILE_ID` from environment variables, both set automatically during `/moonwatch setup`. No extra configuration needed — just use the commands below.
+
+**First use:** Before using the CLI for the first time, check if `moonwatch` is available on PATH by running `which moonwatch`. If it's not installed globally, ask the user: "I'd like to install `@moonwatch/js` globally so I can use the `moonwatch` CLI to log from shell scripts. OK to run `npm install -g @moonwatch/js`?" Only proceed if they confirm. Once installed, it's available for all future sessions.
+
+### Single log entry
+
+```bash
+moonwatch log "deploy started" --level INFO --group deploy
+moonwatch log "backup complete" -l INFO -g cron/backup -m '{"duration":42}'
+```
+
+### Pipe mode — stream lines from any process
+
+```bash
+./build.sh 2>&1 | moonwatch pipe --group build
+tail -f /var/log/app.log | moonwatch pipe --detect-level
+```
+
+### Watcher-tagged logging from scripts
+
+```bash
+moonwatch log "script checkpoint reached" --watcher-id <uuid> --group deploy
+```
+
+### When to use the CLI vs the JS SDK
+
+- **JS/TS code** → use the SDK (`logger.debug(...)`)
+- **Shell scripts, Makefiles, cron jobs, Docker entrypoints, CI pipelines, non-JS languages** → use the CLI (`moonwatch log ...`)
+- **Piping output from any process** → use `| moonwatch pipe`
+
+The CLI supports all the same fields as the SDK: `--level`, `--group`, `--trace-id`, `--watcher-id`, `--metadata` (JSON string). Run `moonwatch --help` for full usage.
+
+---
+
 ## SDK Quick Reference
 
 ### Setup (already done if the project uses this SDK)
@@ -551,7 +589,9 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
 
    For each file, read existing JSON, merge the env key, write back — same pattern as Step 1.
 
-6. Note: `.claude/settings.local.json` is gitignored and specific to the local machine. `.claude/settings.json` is project-scoped and can be committed.
+6. **Save the workspace API key.** Call `logs_get_workspace_key` with the production log file ID. If it succeeds, save the returned key to `.claude/settings.local.json` in the **current project directory** under `env.MOONWATCH_API_KEY`. This key is used by the CLI tool (`moonwatch log`, `moonwatch pipe`) and should not be committed — it's workspace-specific and lives in the local config only. If the call fails (insufficient permissions), skip this — the user can pass `--api-key` manually when using the CLI.
+
+7. Note: `.claude/settings.local.json` is gitignored and specific to the local machine. `.claude/settings.json` is project-scoped and can be committed.
 
 ### Step 4 — SDK Setup
 
@@ -589,17 +629,19 @@ Summarize what was configured:
 > - Personal API key: saved to `~/.claude/settings.json`
 > - Production log file: `<file name>` → `.claude/settings.json`
 > - Dev log file: `<file name>` → `.claude/settings.local.json` *(if selected)*
+> - Workspace API key: saved to `.claude/settings.local.json` *(if fetched)*
 > - SDK: `@moonwatch/js` installed, logger at `<path>` *(if set up)*
 >
 > You can now use:
 > - `/moonwatch-analyze-logs` — Run a log analysis
 > - `/moonwatch-list-watchers` — Check your active watchers
+> - `moonwatch log "message"` — Log from shell scripts (CLI)
 
 ### Important Notes
 
 - The personal API key goes in `~/.claude/settings.json` (user scope, not project scope) because it's tied to the user's Moonwatch account, not a specific project.
 - Log file IDs go in project-scoped settings because different projects use different log files.
-- The workspace API key is for SDK ingestion (writing logs). The personal API key is for MCP (reading logs via Claude). They are different keys.
+- The workspace API key (`MOONWATCH_API_KEY`) is for SDK ingestion and the CLI tool (writing logs). The personal API key is for MCP (reading logs via Claude). They are different keys. The workspace key goes in `.claude/settings.local.json` (project local, gitignored) because it's tied to a specific workspace.
 - If the user says they don't have an account, direct them to https://moonwatch.dev to sign up via Google OAuth.
 - Never display or log the full API key after saving — just confirm it was saved.
 

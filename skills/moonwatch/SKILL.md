@@ -410,6 +410,27 @@ const logger = createLogger({
   traceId: 'req-123',            // optional: default trace ID
   level: 'DEBUG',                 // optional: minimum level (default: 'DEBUG')
   silent: false,                  // optional: suppress console echo (default: false)
+  flush: 'auto',                  // optional: 'auto' (default), 'immediate', or 'manual'
+});
+```
+
+### Flush Modes
+
+- **`'auto'`** (default) — buffers logs and flushes every 1 second or when the buffer is full. Best for long-running servers (Express, Koa, etc.).
+- **`'immediate'`** — flushes on the next microtask after each log call, batching all synchronous logs into one request. Use this for **serverless/Lambda** environments where the runtime may freeze before the 1-second timer fires.
+- **`'manual'`** — no automatic flushing. You must call `await logger.flush()` yourself. Use when you need full control over when network requests happen.
+
+**When setting up the SDK, choose the flush mode based on the runtime:**
+- AWS Lambda, Vercel Functions, Cloudflare Workers, or any short-lived serverless → `flush: 'immediate'`
+- Express, Koa, Fastify, Next.js server, or any long-running process → `flush: 'auto'` (default, can be omitted)
+- Performance-critical hot paths where you want zero overhead → `flush: 'manual'`
+
+```ts
+// Example: Lambda
+const logger = createLogger({
+  logId: '...',
+  apiKey: '...',
+  flush: 'immediate',
 });
 ```
 
@@ -618,6 +639,7 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
       });
       ```
       Use the production log file ID from Step 3 as the `logId`, and the key returned by `logs_get_workspace_key` as the `apiKey`. Both values should be inlined directly — do not use placeholders or ask the user to fill them in.
+      If the project runs in a serverless environment (AWS Lambda, Vercel Functions, Cloudflare Workers, etc.), add `flush: 'immediate'` to the config.
    d. Tell the user the SDK is set up and they can start logging with `logger.info(...)`, `logger.error(...)`, etc.
 
 ### Step 5 — Confirmation
@@ -767,6 +789,182 @@ If multiple watchers have new data, work through them one at a time, starting wi
 
 ## Do NOT
 
-- Do not pass `batchSize`, `flushInterval`, `httpEndpoint`, `wsEndpoint`, or `transport` — these do not exist.
+- Do not pass `batchSize`, `flushInterval`, `httpEndpoint`, `wsEndpoint`, or `transport` — these do not exist. The only flush-related option is `flush: 'auto' | 'immediate' | 'manual'`.
 - Do not call `errorWithStack()` — it does not exist. Use `logger.error(err)` instead.
 - Do not call `logger.shutdown()` unless explicitly tearing down the logger mid-process. It is not required.
+
+---
+
+## Monitoring
+
+Moonwatch also provides real-time monitoring dashboards. You can set up metrics collection in the user's code, create dashboards, and add visualization cards — all via MCP.
+
+### Monitoring Concepts
+
+- **Project** — a data container (like a log file for logs). The SDK pushes data to a project via `projectId`.
+- **Dashboard** — a visual arrangement of cards within a project. Multiple dashboards can show different views of the same data.
+- **Card** — a single visualization: graph (time series), table (aggregated events or snapshot), or key/value (snapshot).
+- **Poll** — SDK calls a handler every 5s and pushes the result. Numbers go to ClickHouse (plottable), objects/arrays go to Valkey (snapshots).
+- **Event** — SDK records a tagged occurrence (e.g. API request). Stored in ClickHouse for aggregation/grouping.
+
+### Monitoring MCP Tools
+
+- **`monitoring_list_projects`** — List all monitoring projects the user can access.
+- **`monitoring_list_dashboards`** — List dashboards within a project.
+- **`monitoring_create_dashboard`** — Create a new dashboard. Requires write access.
+- **`monitoring_list_metrics`** — Discover available poll metrics, events, and snapshots for a project. **Call this first** to see what data exists before creating cards.
+- **`monitoring_query`** — Execute SQL against monitoring data (polls or events). Similar to `logs_query` but for monitoring tables.
+- **`monitoring_create_card`** — Create a card on a dashboard with full config.
+
+### Setting Up Monitoring in User Code
+
+When the user wants to monitor their application, set up the SDK's monitoring API:
+
+```ts
+import { createMonitor } from '@moonwatch/js';
+
+const metrics = createMonitor({
+  projectId: '<uuid>',  // from monitoring_list_projects
+  apiKey: '<workspace-api-key>',  // same key used for logging
+});
+
+// Numeric polls — plottable as line charts
+metrics.poll('cpu.load', () => os.loadavg()[0]);
+metrics.poll('memory.rss', () => process.memoryUsage().rss);
+
+// Object polls — numeric fields extracted to ClickHouse + full snapshot to Valkey
+metrics.poll('db', () => ({
+  connections: pool.totalCount,
+  active: pool.activeCount,
+  idle: pool.idleCount,
+}));
+
+// Array polls — snapshot to Valkey (rendered as table)
+metrics.poll('processes', () => pm2List());
+
+// Events — tagged occurrences for aggregation
+metrics.event('api_request', {
+  endpoint: req.path,
+  method: req.method,
+  status: res.statusCode,
+  duration: elapsed,
+});
+```
+
+### Creating Dashboard Cards via MCP
+
+After data is flowing, create visualizations:
+
+```
+// Graph card — single poll metric
+monitoring_create_card({
+  dashboardId: "<id>",
+  type: "graph",
+  title: "CPU Load",
+  config: {
+    "series": [{ "source": "poll", "metric": "cpu.load", "aggregation": "avg", "color": "#007acc" }]
+  }
+})
+
+// Graph card — event with aggregation
+monitoring_create_card({
+  dashboardId: "<id>",
+  type: "graph",
+  title: "Request Rate",
+  config: {
+    "series": [{ "source": "event", "event": "api_request", "aggregation": "rate", "color": "#3fb950" }]
+  }
+})
+
+// Multi-series graph — correlate metrics
+monitoring_create_card({
+  dashboardId: "<id>",
+  type: "graph",
+  title: "Requests vs Response Time",
+  config: {
+    "series": [
+      { "source": "event", "event": "api_request", "aggregation": "count", "color": "#007acc" },
+      { "source": "event", "event": "api_request", "aggregation": "avg", "valueTag": "duration", "color": "#f0883e" }
+    ],
+    "yAxisMode": "independent"
+  },
+  width: 6
+})
+
+// Event table — top endpoints
+monitoring_create_card({
+  dashboardId: "<id>",
+  type: "table",
+  title: "Top Endpoints",
+  config: {
+    "source": "event",
+    "event": "api_request",
+    "groupBy": "endpoint",
+    "aggregation": "count",
+    "period": 3600,
+    "limit": 10
+  }
+})
+
+// Key/value card — snapshot
+monitoring_create_card({
+  dashboardId: "<id>",
+  type: "keyval",
+  title: "System Info",
+  config: { "source": "snapshot", "snapshot": "system" }
+})
+```
+
+### Monitoring Query Examples
+
+```sql
+-- Recent poll values
+SELECT timestamp, name, value FROM monitoring.polls_realtime ORDER BY timestamp DESC LIMIT 20
+
+-- Average CPU over last hour (from historical rollups)
+SELECT toStartOfMinute(timestamp) as minute, sum(sum_value)/sum(count) as avg_value
+FROM monitoring.polls_historical WHERE name = 'cpu.load' GROUP BY minute ORDER BY minute
+
+-- Event count by endpoint
+SELECT tags['endpoint'] as endpoint, count() as cnt
+FROM monitoring.events WHERE name = 'api_request' GROUP BY endpoint ORDER BY cnt DESC
+
+-- Average response time by endpoint
+SELECT tags['endpoint'] as endpoint, avg(toFloat64OrNull(tags['duration'])) as avg_duration
+FROM monitoring.events WHERE name = 'api_request' GROUP BY endpoint ORDER BY avg_duration DESC
+
+-- Error rate (status >= 500)
+SELECT toStartOfMinute(timestamp) as minute, count() as errors
+FROM monitoring.events WHERE name = 'api_request' AND toFloat64OrNull(tags['status']) >= 500
+GROUP BY minute ORDER BY minute
+```
+
+### Monitoring Table Schema
+
+**monitoring.polls_realtime** — 5s precision, 10min TTL:
+```
+timestamp DateTime64(3), tenant_id UUID, project_id UUID, name LowCardinality(String), value Float64
+```
+
+**monitoring.polls_historical** — 1min rollups:
+```
+timestamp DateTime, tenant_id UUID, project_id UUID, name LowCardinality(String),
+min_value Float64, max_value Float64, sum_value Float64, count UInt64
+```
+
+**monitoring.events** — tagged events:
+```
+timestamp DateTime64(3), tenant_id UUID, project_id UUID, name LowCardinality(String),
+tags Map(String, String)
+```
+
+### Monitoring Workflow
+
+When a user asks to set up monitoring:
+
+1. **Check existing projects** — `monitoring_list_projects`
+2. **Check available data** — `monitoring_list_metrics` to see what's already being pushed
+3. **Set up SDK code** — add `createMonitor()` with polls and events for the metrics they want
+4. **Create a dashboard** — `monitoring_create_dashboard`
+5. **Add cards** — `monitoring_create_card` for each visualization
+6. **Verify** — `monitoring_query` to confirm data is flowing

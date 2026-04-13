@@ -1,6 +1,6 @@
 ---
 name: moonwatch
-description: "Use for ALL Moonwatch operations: investigating runtime bugs, analyzing logs, placing diagnostic logging, reviewing watchers, or setting up Moonwatch. Triggers automatically when the user mentions errors, log analysis, watcher investigations, or asks about issues in their running application. Load this skill BEFORE calling any Moonwatch MCP tool."
+description: "Use for ALL Moonwatch operations: investigating runtime bugs, analyzing logs, placing diagnostic logging, reviewing watchers, setting up monitoring dashboards, or setting up Moonwatch. Triggers automatically when the user mentions errors, log analysis, watcher investigations, monitoring, metrics, dashboards, or asks about issues in their running application. Load this skill BEFORE calling any Moonwatch MCP tool."
 user_invocable: true
 ---
 

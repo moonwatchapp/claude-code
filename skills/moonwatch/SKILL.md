@@ -810,6 +810,7 @@ Moonwatch also provides real-time monitoring dashboards. You can set up metrics 
 ### Monitoring MCP Tools
 
 - **`monitoring_list_projects`** — List all monitoring projects the user can access.
+- **`monitoring_create_project`** — Create a new monitoring project. Requires write access. Returns the project ID for SDK setup.
 - **`monitoring_list_dashboards`** — List dashboards within a project.
 - **`monitoring_create_dashboard`** — Create a new dashboard. Requires write access.
 - **`monitoring_list_metrics`** — Discover available poll metrics, events, and snapshots for a project. **Call this first** to see what data exists before creating cards.
@@ -963,8 +964,10 @@ tags Map(String, String)
 When a user asks to set up monitoring:
 
 1. **Check existing projects** — `monitoring_list_projects`
-2. **Check available data** — `monitoring_list_metrics` to see what's already being pushed
-3. **Set up SDK code** — add `createMonitor()` with polls and events for the metrics they want
-4. **Create a dashboard** — `monitoring_create_dashboard`
-5. **Add cards** — `monitoring_create_card` for each visualization
-6. **Verify** — `monitoring_query` to confirm data is flowing
+2. **If no project exists** — create one with `monitoring_create_project` (needs workspace ID from `logs_list_log_files` output)
+3. **Get the workspace API key** — `logs_get_workspace_key` (same key used for logging)
+4. **Set up SDK code** — add `createMonitor({ projectId, apiKey })` with polls and events for the metrics they want
+5. **Create a dashboard** — `monitoring_create_dashboard`
+6. **Add cards** — `monitoring_create_card` for each visualization
+7. **Check available data** — `monitoring_list_metrics` once data starts flowing
+8. **Verify** — `monitoring_query` to confirm data is being stored

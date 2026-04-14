@@ -1,7 +1,7 @@
 {
   "name": "moonwatch",
   "description": "AI-powered log analysis, debugging, and monitoring. Gives Claude persistent runtime insight via structured logging, real-time monitoring dashboards, MCP-powered queries, and watchers for tracking investigations across conversations.",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "author": {
     "name": "Moonwatch"
   }

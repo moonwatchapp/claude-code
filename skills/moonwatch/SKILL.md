@@ -384,13 +384,25 @@ tail -f /var/log/app.log | moonwatch pipe --detect-level
 moonwatch log "script checkpoint reached" --watcher-id <uuid> --group deploy
 ```
 
+### Monitoring events from scripts
+
+```bash
+# Record a deploy event
+moonwatch event deploy -t service=api -t commit=$(git rev-parse --short HEAD) -t version=1.2.3
+
+# Record a server restart
+moonwatch event server_restart -t reason=oom -t host=prod-1
+
+# Requires MOONWATCH_PROJECT_ID and MOONWATCH_API_KEY env vars (or --project-id / --api-key flags)
+```
+
 ### When to use the CLI vs the JS SDK
 
-- **JS/TS code** → use the SDK (`logger.debug(...)`)
-- **Shell scripts, Makefiles, cron jobs, Docker entrypoints, CI pipelines, non-JS languages** → use the CLI (`moonwatch log ...`)
+- **JS/TS code** → use the SDK (`logger.debug(...)` or `metrics.event(...)`)
+- **Shell scripts, Makefiles, cron jobs, Docker entrypoints, CI pipelines, non-JS languages** → use the CLI (`moonwatch log ...` or `moonwatch event ...`)
 - **Piping output from any process** → use `| moonwatch pipe`
 
-The CLI supports all the same fields as the SDK: `--level`, `--group`, `--trace-id`, `--watcher-id`, `--metadata` (JSON string). Run `moonwatch --help` for full usage.
+The CLI supports all the same fields as the SDK: `--level`, `--group`, `--trace-id`, `--watcher-id`, `--metadata` (JSON string), `--tag` / `-t` (for events). Run `moonwatch --help` for full usage.
 
 ---
 

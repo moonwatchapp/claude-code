@@ -843,6 +843,12 @@ metrics.poll('db', () => ({
 // Array polls — snapshot to Valkey (rendered as table)
 metrics.poll('processes', () => pm2List());
 
+// Async polls — for database queries, API calls, etc.
+metrics.poll('db.stats', async () => {
+  const result = await pool.query('SELECT count(*) as cnt, sum(active) as active FROM pg_stat_activity');
+  return { connections: parseInt(result.rows[0].cnt), active: parseInt(result.rows[0].active) };
+});
+
 // Events — tagged occurrences for aggregation
 metrics.event('api_request', {
   endpoint: req.path,

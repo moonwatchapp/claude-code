@@ -828,6 +828,10 @@ Moonwatch also provides real-time monitoring dashboards. You can set up metrics 
 - **`monitoring_list_metrics`** — Discover available poll metrics, events, and snapshots for a project. **Call this first** to see what data exists before creating cards.
 - **`monitoring_query`** — Execute SQL against monitoring data (polls or events). Similar to `logs_query` but for monitoring tables.
 - **`monitoring_create_card`** — Create a card on a dashboard with full config.
+- **`monitoring_list_cards`** — List cards on a dashboard (id, type, title, position, source summary).
+- **`monitoring_get_card`** — Get a single card's full settings, including complete config JSON.
+- **`monitoring_update_card`** — Update an existing card's title, type, config, or position.
+- **`monitoring_delete_card`** — Delete a card from a dashboard.
 
 ### Setting Up Monitoring in User Code
 

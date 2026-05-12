@@ -1,12 +1,46 @@
 ---
 name: moonwatch
-description: "Use for ALL Moonwatch operations: investigating runtime bugs, analyzing logs, placing diagnostic logging, reviewing watchers, setting up monitoring dashboards, or setting up Moonwatch. Triggers automatically when the user mentions errors, log analysis, watcher investigations, monitoring, metrics, dashboards, or asks about issues in their running application. Load this skill BEFORE calling any Moonwatch MCP tool."
+description: "Use for ALL Moonwatch operations: investigating runtime bugs, analyzing logs, placing diagnostic logging, reviewing watchers, setting up monitoring dashboards, or setting up Moonwatch. Triggers automatically when the user mentions errors, log analysis, watcher investigations, monitoring, metrics, dashboards, or asks about issues in their running application. Load this skill BEFORE using the Moonwatch `mw` CLI."
 user_invocable: true
 ---
 
 # Moonwatch — AI Workflow Guide
 
-This project uses Moonwatch to give you persistent runtime insight. You can place log statements freely — they are sent to a central server and you can query them via MCP at any time. This means you don't need to ask the user to copy-paste logs. You place them, the user reproduces the issue, and you query the results yourself.
+This project uses Moonwatch to give you persistent runtime insight. You can place log statements freely — they are sent to a central server and you can query them at any time via the `mw` CLI. This means you don't need to ask the user to copy-paste logs. You place them, the user reproduces the issue, and you query the results yourself.
+
+## The `mw` CLI
+
+All Moonwatch reads and writes go through **`mw`** — the command-line tool from the `@moonwatch/cli` npm package. Run `mw --help` (or `mw <command> --help`). Auth is automatic: `mw` reads `MOONWATCH_PERSONAL_KEY` from the environment, which is already set if Moonwatch is configured for this project (the setup wizard saves it to `~/.claude/settings.json`).
+
+**If `mw` isn't on PATH** (`which mw` fails): just prefix every command with `npx @moonwatch/cli@latest` (e.g. `npx @moonwatch/cli@latest logs query …`). Optionally ask the user once: "OK to `npm install -g @moonwatch/cli` so I can use `mw` directly?" — but `npx` works without installing anything.
+
+**Conventions:**
+- Output is a human table on a TTY, JSON when piped or with `--json`. When you need to parse output, add `--json` (or pipe to `jq`).
+- Exit codes: `0` ok · `1` API/server error · `2` bad usage/config · `3` auth failed · `4` rate-limited.
+- IDs may be given with or without their display prefix (`log-…`, `watcher-…`, `project-…`).
+
+**Command reference** (each mirrors a `https://mcp.moonwatch.dev/v1/…` REST endpoint):
+
+| Need | Command |
+|------|---------|
+| Which workspaces/roles your key grants | `mw whoami` |
+| List log files (+ workspace IDs) | `mw logs files [--owned]` |
+| Create a log file | `mw logs files create <name> --workspace <id> [--folder <id>]` |
+| Get a workspace's ingestion key | `mw logs key <logFileId>` |
+| Query logs (SQL) | `mw logs query <logFileId> "<SQL>"` (or `--file q.sql`, or pipe SQL on stdin) |
+| List watchers | `mw watchers list [--log <logFileId>]` |
+| Read a watcher (clears its new-data flag) | `mw watchers get <id> [--no-ack]` |
+| Create a watcher | `mw watchers create --title "…" --description "…" --log <logFileId>` |
+| Update a watcher | `mw watchers update <id> [--findings "…"] [--status active\|resolved] [--status-summary "…"] [--title "…"] [--description "…"]` |
+| List monitoring projects | `mw monitoring projects list` |
+| Create a monitoring project | `mw monitoring projects create <name> --workspace <id>` |
+| List / create dashboards | `mw monitoring dashboards list --project <id>` · `mw monitoring dashboards create <name> --project <id>` |
+| Discover poll metrics / events / snapshots | `mw monitoring metrics --project <id>` |
+| Query monitoring data (SQL) | `mw monitoring query <projectId> "<SQL>"` |
+| List / get / create / update / delete cards | `mw monitoring cards list --dashboard <id>` · `mw monitoring cards get <id>` · `mw monitoring cards create --dashboard <id> --type graph\|table\|keyval --title "…" --config '<json>' [--width N]` · `mw monitoring cards update <id> [--title …] [--config '<json>'] [--w N] [--h N] [--x N] [--y N] [--type …]` · `mw monitoring cards delete <id>` |
+| Delete a poll/event/snapshot source | `mw monitoring data delete --project <id> --name <name> --type poll\|event\|snapshot` |
+
+> Note: `mw` is the **query/management** CLI. There's a separate `moonwatch` binary (from `@moonwatch/js`) for **sending** logs/events from shell scripts — `moonwatch log` / `moonwatch pipe` / `moonwatch event`. See [CLI for Non-JS Environments](#cli-for-non-js-environments).
 
 ## Commands
 
@@ -17,13 +51,14 @@ Check the user's request (or the arguments passed to this skill) to determine wh
 | `/moonwatch-setup` | Interactive setup wizard — [Setup Wizard](#setup-wizard) |
 | `/moonwatch-analyze-logs` | Ad-hoc log analysis — [Analyze Logs](#analyze-logs) |
 | `/moonwatch-list-watchers` | List and review watchers — [List Watchers](#list-watchers) |
+| `/moonwatch-monitoring` | Set up / manage monitoring dashboards — [Monitoring](#monitoring) |
 | No specific command | Loaded contextually — use the relevant workflow section below |
 
 ---
 
 ## Log File Selection
 
-**Gate rule:** Before ANY Moonwatch MCP tool call (except during setup), you must have log files resolved. Do this once at the start of a conversation, then reuse for all subsequent tool calls.
+**Gate rule:** Before ANY `mw` command (except during setup), you must have log files resolved. Do this once at the start of a conversation, then reuse for all subsequent commands.
 
 Log file IDs are stored as environment variables in Claude Code settings (`env` key), which are available to you automatically.
 
@@ -33,23 +68,23 @@ Log file IDs are stored as environment variables in Claude Code settings (`env` 
 4. If neither is set → tell the user: "Moonwatch is not configured for this project. Run `/moonwatch setup` first." and stop.
 
 **Usage rules:**
-- Always pass the resolved `logFileId` to `logs_query`, `watchers_create`, and `watchers_list`
+- Always pass the resolved log file ID to `mw logs query`, `mw watchers create --log`, and `mw watchers list --log`
 - Default to the production file unless the user explicitly mentions local/dev
-- For `watchers_list`, pass `logFileId` to filter to the relevant file
+- For `mw watchers list`, pass `--log <logFileId>` to filter to the relevant file
 
 ---
 
 ## The Investigation Workflow
 
-1. **Create a watcher** via MCP (`watchers_create`) describing what you're investigating — you get back a watcher ID (e.g. `watcher-a1b2c3d4-...`)
+1. **Create a watcher** — `mw watchers create --title "…" --description "…" --log <logFileId>` describing what you're investigating — you get back a watcher ID (e.g. `watcher-a1b2c3d4-...`)
 2. **Place logs liberally** using `logger.debug()` with the watcher ID attached — instrument every code path that could be relevant
-3. **Update the watcher** with what you actually instrumented — call `watchers_update` to record the exact files, functions, and what each log captures (see "Update After Instrumentation" below)
+3. **Update the watcher** with what you actually instrumented — `mw watchers update <id> --description "…"` to record the exact files, functions, and what each log captures (see "Update After Instrumentation" below)
 4. **Ask the user to reproduce** the issue (or wait for the next occurrence)
-5. **Query the logs via MCP** using `logs_query` with `WHERE watcher_id = '<uuid>'` — you see exactly the logs you placed, no noise
-6. **Record findings** via `watchers_update` — accumulate your analysis so you don't lose context across conversations
+5. **Query the logs** — `mw logs query <logFileId> "SELECT … WHERE watcher_id = '<uuid>' …"` — you see exactly the logs you placed, no noise
+6. **Record findings** — `mw watchers update <id> --findings "…"` — accumulate your analysis so you don't lose context across conversations
 7. **Iterate** — add more logs, query again, update findings
 8. **Clean up** — remove all `logger.debug()` calls and watcher-scoped logger setup you added during the investigation
-9. **Resolve** — mark the watcher as resolved via `watchers_update` with `status: "resolved"`
+9. **Resolve** — `mw watchers update <id> --status resolved`
 
 You should default to placing logs early and liberally when investigating runtime issues. Don't spend multiple rounds guessing from static code alone — instrument the code, get the data, then fix the bug. Logs persist across runs, so once placed, they keep providing insight. Use `logger.debug()` freely — the watcher ID lets you filter to only your logs, so volume isn't a concern.
 
@@ -109,7 +144,7 @@ Every watcher has a `statusSummary` field — a short, authoritative headline of
 **How it differs from findings:** The status summary is the headline; findings are the detailed analysis. A human reading the dashboard sees only the status summary in the collapsed view. The model reads the status summary first when picking up an existing watcher, then dives into findings for full context.
 
 **When to set it:**
-- After your first review of a new watcher's data (`watchers_update` with `statusSummary`)
+- After your first review of a new watcher's data (`mw watchers update <id> --status-summary "…"`)
 - Every time you review new data flagged by the detection cron
 - When the investigation state changes (fix deployed, resolved, waiting for repro, etc.)
 
@@ -126,22 +161,20 @@ This turns watcher review from "look at everything and figure it out" into "chec
 
 The watcher description is written at creation time — before you've actually placed any logs. Once you finish instrumenting the code, **immediately update the watcher** so it reflects what was actually done. This is critical because the next session will read the watcher and needs to know exactly what's instrumented and where, without having to scan the codebase.
 
-Call `watchers_update` with an updated `description` that includes:
+Run `mw watchers update <id> --description "…"` with an updated description that includes:
 - **Every file you touched** and what logs you placed there
 - **What each log captures** (inputs, branch decisions, timing, state, etc.)
 - **The groups you used** so the next session knows how to query by subsystem
 
-If you also have initial observations from reading the code (e.g. suspected root cause), put those in `findings`. The description is "what exists and where"; findings is "what we think and know."
+If you also have initial observations from reading the code (e.g. suspected root cause), pass them via `--findings`. The description is "what exists and where"; findings is "what we think and know."
 
-**Example:** You create a watcher for intermittent WebSocket disconnects, then instrument 3 files. After placing all logs, update:
+**Example:** You create a watcher for intermittent WebSocket disconnects, then instrument 3 files. After placing all logs:
 
 ```
-watchers_update({
-  id: "a1b2c3d4-...",
-  description: "Investigating intermittent WebSocket disconnects reported by user. Suspected cause: reconnect timer not being cleared on manual disconnect.\n\nInstrumentation placed:\n- `src/ws/connection.ts`: connect() entry with params, onopen/onclose/onerror events with codes and readyState, reconnect timer scheduling with delay value\n- `src/ws/reconnect.ts`: reconnect attempt counter, backoff calculation, timer clear on manual disconnect\n- `src/api/handler.ts`: request handler entry with traceId, WS send with payload size, send failures with error\n\nAll logs use group `ws/connection` or `ws/reconnect`. Looking for: onclose events without a preceding manual disconnect call, or reconnect attempts that overlap with an existing connection.",
-  statusSummary: "Debug logs placed across 3 files. Awaiting reproduction.",
-  findings: "Code review shows `reconnectTimer` is set in onclose but never cleared in `disconnect()` — likely cause. Logs placed to confirm."
-})
+mw watchers update a1b2c3d4-... \
+  --description "Investigating intermittent WebSocket disconnects. Suspected cause: reconnect timer not cleared on manual disconnect. Instrumented src/ws/connection.ts (connect entry with params, onopen/onclose/onerror with codes+readyState, reconnect timer scheduling+delay), src/ws/reconnect.ts (attempt counter, backoff calc, timer clear on manual disconnect), src/api/handler.ts (handler entry with traceId, WS send with payload size, send failures). All logs use group ws/connection or ws/reconnect. Looking for: onclose events without a preceding manual disconnect, or reconnect attempts that overlap an existing connection." \
+  --status-summary "Debug logs placed across 3 files. Awaiting reproduction." \
+  --findings "Code review shows reconnectTimer is set in onclose but never cleared in disconnect() — likely cause. Logs placed to confirm."
 ```
 
 **Why this matters:** Without this update, a future session sees only the original description ("investigating WebSocket disconnects") and has to grep the codebase to find what was instrumented. With it, the next session can immediately query the right groups, understand the coverage, and decide whether more logs are needed — or jump straight to analysis when data arrives.
@@ -149,8 +182,8 @@ watchers_update({
 ### Creating and Using a Watcher
 
 ```
-1. watchers_create({ title: "<short label>", logFileId: "<configured log file ID>", description: "<detailed description as above>" })
-   -> returns ID: "watcher-a1b2c3d4-..."
+1. mw watchers create --title "<short label>" --description "<detailed description as above>" --log <configured log file ID>
+   -> prints the new watcher ID: "watcher-a1b2c3d4-..."
 
 2. Place logs in code with that watcher ID:
 ```
@@ -168,33 +201,35 @@ logger.debug({ message: "auth header value", watcherId: "a1b2c3d4-...", metadata
 
 ```
 3. User reproduces -> query YOUR logs only:
-   logs_query({ query: "SELECT timestamp, message, metadata FROM logs.entries WHERE watcher_id = 'a1b2c3d4-...' ORDER BY timestamp" })
+   mw logs query <logFileId> "SELECT timestamp, message, metadata FROM logs.entries WHERE watcher_id = 'a1b2c3d4-...' ORDER BY timestamp"
 
    Then check what ELSE was happening around the same timestamps:
-   logs_query({ query: "SELECT timestamp, level, group, message FROM logs.entries WHERE timestamp BETWEEN '2026-02-18 13:42:00' AND '2026-02-18 13:43:00' ORDER BY timestamp LIMIT 50" })
+   mw logs query <logFileId> "SELECT timestamp, level, group, message FROM logs.entries WHERE timestamp BETWEEN '2026-02-18 13:42:00' AND '2026-02-18 13:43:00' ORDER BY timestamp LIMIT 50"
 
    Your watcher logs tell you what YOUR instrumented code paths did. The surrounding logs tell you what the rest of the system was doing at the same time — errors in other subsystems, concurrent requests, background jobs firing. This context often reveals the actual cause (e.g. your watcher shows a retry, but the surrounding logs show a database connection pool exhaustion that triggered it).
 
 4. Record what you learned AND report to the user:
-   watchers_update({ id: "a1b2c3d4-...", findings: "The reconnect fails because wsState is still 'connecting' when onclose fires — race condition between...", statusSummary: "Root cause: wsState race condition in onclose handler. Fix in progress." })
+   mw watchers update a1b2c3d4-... --findings "The reconnect fails because wsState is still 'connecting' when onclose fires — race condition between..." --status-summary "Root cause: wsState race condition in onclose handler. Fix in progress."
    Always tell the user what you found — the watcher records findings for future sessions, but the user needs to hear it now.
 
 5. Fix the bug, verify, then clean up and resolve:
    - Remove all `logger.debug()` / `dbg.debug()` calls you added, plus any `withWatcher()` setup and imports added solely for the investigation
    - Then mark resolved:
-   watchers_update({ id: "a1b2c3d4-...", status: "resolved", findings: "Fixed by checking wsState in onclose handler. Verified reconnect works after 5 attempts. Removed all diagnostic debug logs.", statusSummary: "Resolved. wsState race condition fixed, verified with 5 reconnect cycles." })
+   mw watchers update a1b2c3d4-... --status resolved --findings "Fixed by checking wsState in onclose handler. Verified reconnect works after 5 attempts. Removed all diagnostic debug logs." --status-summary "Resolved. wsState race condition fixed, verified with 5 reconnect cycles."
 ```
+
+> `--findings` / `--description` take a single string argument. Keep them to a few sentences on one line (reads fine in the dashboard); if you need newlines, use `$'line one\nline two'`.
 
 ### ID Prefixes
 
-The dashboard and MCP tools display IDs with human-readable prefixes: `watcher-<uuid>` for watchers and `log-<uuid>` for log files. These prefixes are **display-only** — the database stores raw UUIDs. Users may copy-paste prefixed IDs from the dashboard. You can safely pass either form (prefixed or raw UUID) to any MCP tool — the prefix is automatically stripped. However, when using IDs in **SDK code** (e.g. `withWatcher()`) or **SQL queries** (e.g. `WHERE watcher_id = '...'`), always use the **raw UUID without the prefix**.
+The dashboard displays IDs with human-readable prefixes: `watcher-<uuid>` for watchers and `log-<uuid>` for log files. These prefixes are **display-only** — the database stores raw UUIDs. Users may copy-paste prefixed IDs from the dashboard. You can safely pass either form (prefixed or raw UUID) to any `mw` command — the prefix is automatically stripped. However, when using IDs in **SDK code** (e.g. `withWatcher()`) or **SQL queries** (e.g. `WHERE watcher_id = '...'`), always use the **raw UUID without the prefix**.
 
-### Watcher MCP Tools
+### Watcher commands
 
-- **`watchers_create`** — Start an investigation. Requires `logFileId` (use configured file), a concise title, and a detailed description.
-- **`watchers_list`** — See all your watchers and which have new data.
-- **`watchers_get`** — Read full details + findings. Resets the "new data" flag.
-- **`watchers_update`** — Record findings, change status, update title, description, or status summary.
+- **`mw watchers create --title "…" --description "…" --log <logFileId>`** — Start an investigation; prints the new watcher ID.
+- **`mw watchers list [--log <logFileId>]`** — See all your watchers and which have new data.
+- **`mw watchers get <id>`** — Read full details + findings. Resets the "new data" flag (use `--no-ack` to peek without clearing it).
+- **`mw watchers update <id> [--findings …] [--status active|resolved] [--status-summary …] [--title …] [--description …]`** — Record findings, change status, update title/description/status summary.
 
 ### When to Create a Watcher
 
@@ -234,20 +269,20 @@ This is much more effective than placing one log and having to do multiple round
 
 When the user asks you to look into a problem visible in logs (e.g. "why are we getting 500s on the billing endpoint?"), follow this pattern:
 
-1. **Query the logs first** — use `logs_query` to understand the problem
+1. **Query the logs first** — `mw logs query <logFileId> "<SQL>"` to understand the problem
 2. **Report your findings** to the user
-3. **Check for existing watchers** — call `watchers_list` to see if there's already a watcher tracking this issue
-4. **If a related watcher exists** — read it with `watchers_get`, append your new findings via `watchers_update`
+3. **Check for existing watchers** — `mw watchers list --log <logFileId>` to see if there's already a watcher tracking this issue
+4. **If a related watcher exists** — read it with `mw watchers get <id>`, append your new findings via `mw watchers update <id> --findings "…"`
 5. **If no watcher exists** — offer to create one:
 
 > "I found the issue — the billing endpoint is throwing a null reference when `subscription.plan` is missing. I can set up a watcher to track this. It'll place debug logs around the billing flow so we automatically capture the full context next time it happens. Want me to do that?"
 
 If the user agrees:
-- `watchers_create({ title: "Null ref in billing endpoint", description: "Tracking null ref in billing endpoint when subscription.plan is missing", logFileId: "..." })`
+- `mw watchers create --title "Null ref in billing endpoint" --description "Tracking null ref in billing endpoint when subscription.plan is missing" --log <logFileId>`
 - Place `logger.debug()` calls with the watcher ID around the relevant code paths
 - The cron job will flag new matching logs automatically, so next time it happens you'll have full context
 
-**This matters because investigations span multiple conversations.** A watcher persists your findings and keeps collecting data between sessions. Without one, the next conversation starts from scratch. With one, you (or a future Claude) can call `watchers_list`, see there's an active watcher with findings, and pick up where you left off.
+**This matters because investigations span multiple conversations.** A watcher persists your findings and keeps collecting data between sessions. Without one, the next conversation starts from scratch. With one, you (or a future Claude) can run `mw watchers list`, see there's an active watcher with findings, and pick up where you left off.
 
 ### The full flow looks like:
 
@@ -255,25 +290,26 @@ If the user agrees:
 User: "We're seeing intermittent 500s on POST /api/orders"
 
 You:
-  1. logs_query -> find the errors, identify the pattern
+  1. mw logs query <logFileId> "..." -> find the errors, identify the pattern
   2. Report: "These are timeout errors when the payment gateway takes >10s"
-  3. watchers_list -> no existing watcher for this
+  3. mw watchers list --log <logFileId> -> no existing watcher for this
   4. Offer: "Want me to set up a watcher? I'll instrument the order flow
      so we capture timing data automatically next time."
 
 User: "Yes"
 
 You:
-  5. watchers_create({ title: "500s on POST /api/orders — gateway timeouts", logFileId: "<configured log file ID>", description: "Intermittent 500s on POST /api/orders — payment gateway timeouts >10s" })
+  5. mw watchers create --title "500s on POST /api/orders — gateway timeouts" \
+        --description "Intermittent 500s on POST /api/orders — payment gateway timeouts >10s" --log <logFileId>
   6. Place debug logs:
      - Before the gateway call (log request params, timestamp)
      - After the gateway call (log response time, status)
      - In the error handler (log the full error context)
      - At the retry logic (log attempt count, backoff delay)
-  7. watchers_update({
-     description: "Intermittent 500s on POST /api/orders — payment gateway timeouts >10s.\n\nInstrumentation placed:\n- `src/services/orderService.ts`: createOrder() entry with orderId and items, pre-gateway timestamp, post-gateway response time and status\n- `src/services/paymentGateway.ts`: charge() entry with amount and customerId, HTTP request timing, response status and body\n- `src/services/orderService.ts`: error handler with full error context and elapsed time\n- `src/services/orderService.ts`: retry logic with attempt count, backoff delay, previous error\n\nAll logs use group `api/orders`. Looking for: gateway response times >10s, retry patterns, and whether timeouts correlate with specific request params.",
-     findings: "Initial analysis: gateway timeouts when response >10s. Code review shows no timeout configured on the HTTP client — defaults to Node's global timeout. Logs placed to capture timing data on next occurrence.",
-     statusSummary: "Debug logs placed across 2 files. Awaiting reproduction." })
+  7. mw watchers update <id> \
+        --description "Intermittent 500s on POST /api/orders — payment gateway timeouts >10s. Instrumented src/services/orderService.ts (createOrder entry, pre/post-gateway timing, error handler, retry logic) and src/services/paymentGateway.ts (charge entry, HTTP timing, response). All logs use group api/orders. Looking for: gateway response times >10s, retry patterns, correlation with request params." \
+        --findings "Initial analysis: gateway timeouts when response >10s. No timeout configured on the HTTP client — defaults to Node's global timeout. Logs placed to capture timing data on next occurrence." \
+        --status-summary "Debug logs placed across 2 files. Awaiting reproduction."
   8. Report back to user with what you placed and what to expect
 
 --- later, in a new conversation ---
@@ -281,9 +317,9 @@ You:
 User: "The 500s happened again"
 
 You:
-  1. watchers_list -> see the active watcher with new_data = true
-  2. watchers_get -> read previous findings
-  3. logs_query WHERE watcher_id = '...' -> see the detailed debug logs
+  1. mw watchers list --log <logFileId> -> see the active watcher flagged with new data
+  2. mw watchers get <id> -> read previous findings
+  3. mw logs query <logFileId> "... WHERE watcher_id = '...'" -> see the detailed debug logs
   4. Now you have full context without starting over
 ```
 
@@ -358,7 +394,9 @@ Use `withTraceId()` to correlate logs across a single request or operation, espe
 
 ## CLI for Non-JS Environments
 
-When you need to log from shell scripts, cron jobs, build pipelines, or any non-JavaScript context, use the `moonwatch` CLI instead of the JS SDK. It's part of the same `@moonwatch/js` package.
+> ⚠️ Two different CLIs: **`mw`** (`@moonwatch/cli`) is for **reading/managing** — log queries, watchers, monitoring (covered throughout this guide). **`moonwatch`** (`@moonwatch/js`) is for **sending** — emitting log entries and monitoring events from shell. This section is about the latter.
+
+When you need to **emit** logs or events from shell scripts, cron jobs, build pipelines, or any non-JavaScript context, use the `moonwatch` CLI instead of the JS SDK. It's part of the `@moonwatch/js` package.
 
 **Prerequisites:** The CLI reads `MOONWATCH_API_KEY` (workspace key) and `MOONWATCH_LOG_FILE_ID` from environment variables, both set automatically during `/moonwatch setup`. No extra configuration needed — just use the commands below.
 
@@ -468,14 +506,14 @@ Use this to capture logs from third-party code or existing console.log statement
 
 ---
 
-## Reading Logs via MCP
+## Reading logs with `mw`
 
-You have two MCP tools available:
-
-- **`logs_list_log_files`** — Lists all log files with data. Call this first to find the log file ID.
-- **`logs_query`** — Execute SQL (ClickHouse) against a log file. Tenant/log filtering is automatic.
+- **`mw logs files`** — Lists all log files (with their workspace IDs). Use during setup to find/pick the log file ID.
+- **`mw logs query <logFileId> "<SQL>"`** — Execute ClickHouse SQL against a log file. Tenant/log filtering is auto-injected — don't add `tenant_id`/`log_id` to your `WHERE`. The query can also come from `--file q.sql` or stdin. Output is a table on a TTY, JSON (`{columns, rows, rowCount}`) when piped or with `--json`.
 
 ### Common Queries
+
+Pass these as the SQL argument to `mw logs query <logFileId> "…"`:
 
 ```sql
 -- Recent errors
@@ -550,9 +588,9 @@ This guides the user through connecting Claude Code to Moonwatch. Follow these s
 
    If the old key's value looks like a valid personal key (starts with `mw_personal_`) and `MOONWATCH_PERSONAL_KEY` is not already set, reuse the value as the new key — save it as `MOONWATCH_PERSONAL_KEY` in `~/.claude/settings.json` and skip to step 6.
 
-3. Check if the `MOONWATCH_PERSONAL_KEY` environment variable is already set (it's available as `process.env.MOONWATCH_PERSONAL_KEY` / accessible via the MCP server config).
+3. Check if the `MOONWATCH_PERSONAL_KEY` environment variable is already set (it's available as `process.env.MOONWATCH_PERSONAL_KEY`).
 
-4. **If set:** Verify it works by calling `logs_list_log_files`. If the call succeeds, tell the user their key is valid and skip to Step 2. If auth fails (401/403), tell the user their key is stale and continue to the key setup flow below.
+4. **If set:** Verify it works by running `mw whoami` (or `npx @moonwatch/cli@latest whoami` if `mw` isn't installed). If it succeeds, tell the user their key is valid and skip to Step 2. If auth fails (exit code 3 / 401), tell the user their key is stale and continue to the key setup flow below.
 
 5. **If not set or stale:** Tell the user:
    > Your Moonwatch personal key is not configured. You can find your key at:
@@ -598,7 +636,7 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
 
 4. **If no existing `logId` and no env vars:** Run the log file selection flow.
 
-   a. Call `logs_list_log_files` to discover available files.
+   a. Run `mw logs files` (or `mw logs files --json` to parse it) to discover available files and their workspace IDs.
 
    b. **Try to auto-detect the best match.** Look at the project name (from `package.json` `name` field, or the git repo name / directory name) and compare it against the available log file names and paths. Consider partial matches, common abbreviations, and workspace context. If you find a likely match, use it as the recommended first option.
 
@@ -611,10 +649,10 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
 
    d. **Handle each choice:**
       - **Best match / existing file selected:** Use that file's ID.
-      - **Create a new log file:** Ask the user for a name (suggest the project name as default via `AskUserQuestion`). Then call `logs_create_log_file` with the name and the user's workspace ID. Use the returned file ID.
+      - **Create a new log file:** Ask the user for a name (suggest the project name as default via `AskUserQuestion`). Then run `mw logs files create <name> --workspace <workspaceId>` (workspace ID from the `mw logs files` output, or `mw whoami`). Use the returned file ID.
       - **Enter manually:** Use `AskUserQuestion` to collect the log file ID via the "Other" free-text option.
 
-   e. **Dev log file** (optional) — after selecting the production file, ask if they also want a dev file. Call `logs_list_log_files` with `onlyOwned: true` to show only files from workspaces the user owns. Offer the same 3-choice pattern (auto-detect, create new, enter manually).
+   e. **Dev log file** (optional) — after selecting the production file, ask if they also want a dev file. Run `mw logs files --owned` to show only files from workspaces the user owns. Offer the same 3-choice pattern (auto-detect, create new, enter manually).
 
 5. Write the selections:
    - Production file ID → `.claude/settings.json` in the **current project directory** under `env.MOONWATCH_LOG_FILE_ID`
@@ -622,7 +660,7 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
 
    For each file, read existing JSON, merge the env key, write back — same pattern as Step 1.
 
-6. **Save the workspace API key.** Call `logs_get_workspace_key` with the production log file ID. If it succeeds, save the returned key to `.claude/settings.local.json` in the **current project directory** under `env.MOONWATCH_API_KEY`. This key is used by the CLI tool (`moonwatch log`, `moonwatch pipe`) and should not be committed — it's workspace-specific and lives in the local config only. If the call fails (insufficient permissions), skip this — the user can pass `--api-key` manually when using the CLI.
+6. **Save the workspace API key.** Run `mw logs key <productionLogFileId>` (it prints the bare key). If it succeeds, save that key to `.claude/settings.local.json` in the **current project directory** under `env.MOONWATCH_API_KEY`. This key is used by the SDK and the `moonwatch` ingestion CLI (`moonwatch log`, `moonwatch pipe`) and should not be committed — it's workspace-specific and lives in the local config only. If it fails (exit 3 — read-only role), skip this — the user can pass `--api-key` manually when using the ingestion CLI.
 
 7. Note: `.claude/settings.local.json` is gitignored and specific to the local machine. `.claude/settings.json` is project-scoped and can be committed.
 
@@ -640,17 +678,17 @@ Check if the SDK is already set up. If it is, we can reuse the existing `logId` 
 
    If the user wants to set it up:
    a. Install the dependency: `npm install @moonwatch/js`
-   b. **Fetch the workspace API key yourself** — call `logs_get_workspace_key` with the production log file ID from Step 3. This works for any user with `write`, `manager`, or `owner` role. **Do not ask the user for the workspace key — fetch it automatically.** The only key the user should ever need to provide manually is their personal key (Step 1). If `logs_get_workspace_key` fails due to insufficient permissions (user has `read`-only role), then fall back to directing the user to ask a workspace manager for the key or copy it from workspace settings at https://moonwatch.dev/app.
+   b. **Fetch the workspace API key yourself** — run `mw logs key <productionLogFileId>` (the file ID from Step 3). This works for any user with `write`, `manager`, or `owner` role. **Do not ask the user for the workspace key — fetch it automatically.** The only key the user should ever need to provide manually is their personal key (Step 1). If `mw logs key` fails (exit 3 — read-only role), fall back to directing the user to ask a workspace manager for the key or copy it from workspace settings at https://moonwatch.dev/app.
    c. Create a logger file (e.g. `src/lib/logger.ts` or wherever makes sense for the project):
       ```ts
       import { createLogger } from '@moonwatch/js';
 
       export const logger = createLogger({
-        apiKey: '<workspace-api-key-from-logs_get_workspace_key>',
+        apiKey: '<workspace-api-key-from-mw-logs-key>',
         logId: '<the-production-log-file-id-from-step-3>',
       });
       ```
-      Use the production log file ID from Step 3 as the `logId`, and the key returned by `logs_get_workspace_key` as the `apiKey`. Both values should be inlined directly — do not use placeholders or ask the user to fill them in.
+      Use the production log file ID from Step 3 as the `logId`, and the key returned by `mw logs key` as the `apiKey`. Both values should be inlined directly — do not use placeholders or ask the user to fill them in.
       If the project runs in a serverless environment (AWS Lambda, Vercel Functions, Cloudflare Workers, etc.), add `flush: 'immediate'` to the config.
    d. Tell the user the SDK is set up and they can start logging with `logger.info(...)`, `logger.error(...)`, etc.
 
@@ -675,7 +713,7 @@ Summarize what was configured:
 
 - The personal API key goes in `~/.claude/settings.json` (user scope, not project scope) because it's tied to the user's Moonwatch account, not a specific project.
 - Log file IDs go in project-scoped settings because different projects use different log files.
-- The workspace API key (`MOONWATCH_API_KEY`) is for SDK ingestion and the CLI tool (writing logs). The personal API key is for MCP (reading logs via Claude). They are different keys. The workspace key goes in `.claude/settings.local.json` (project local, gitignored) because it's tied to a specific workspace.
+- The workspace API key (`MOONWATCH_API_KEY`) is for SDK ingestion and the `moonwatch` ingestion CLI (writing logs/events). The personal API key (`MOONWATCH_PERSONAL_KEY`) is for the `mw` CLI / `/v1` REST API (reading logs, managing watchers and monitoring). They are different keys. The workspace key goes in `.claude/settings.local.json` (project local, gitignored) because it's tied to a specific workspace.
 - If the user says they don't have an account, direct them to https://moonwatch.dev to sign up via Google OAuth.
 - Never display or log the full API key after saving — just confirm it was saved.
 
@@ -689,12 +727,12 @@ Summarize what was configured:
 
 Before running analysis, get context on what's already being tracked:
 
-1. Call `watchers_list` with the resolved `logFileId`.
+1. Run `mw watchers list --log <logFileId>`.
 2. Note any active watchers — these represent ongoing investigations. You'll use this to avoid creating duplicate watchers for known issues.
 
 ### Run Analysis Queries
 
-Execute these queries against the configured log file (adjust time window based on data volume):
+Run each of these via `mw logs query <logFileId> "<SQL>"` (adjust the time window based on data volume):
 
 1. **Level distribution** — overall health check:
    ```sql
@@ -762,7 +800,7 @@ Keep the report concise and actionable. Example:
 
 ### List and Display
 
-1. Call `watchers_list` with the resolved `logFileId`.
+1. Run `mw watchers list --log <logFileId>` (add `--json` if you want to sort/group programmatically).
 2. Present watchers grouped by status:
 
 **Active watchers first**, then resolved. For each watcher show:
@@ -786,14 +824,14 @@ Example output format:
 
 ### Handle New Data
 
-If any active watcher has `new_data = true`, offer to investigate it:
+If any active watcher has new data (the `NEW`/`newData` flag), offer to investigate it:
 
-1. Call `watchers_get` for the watcher (this resets the new_data flag).
+1. `mw watchers get <id>` (this resets the new-data flag).
 2. Read the existing findings and description to understand context.
-3. Query the watcher's tagged logs: `SELECT timestamp, message, group, metadata FROM logs.entries WHERE watcher_id = '<id>' ORDER BY timestamp DESC LIMIT 50`
+3. Query the watcher's tagged logs: `mw logs query <logFileId> "SELECT timestamp, message, group, metadata FROM logs.entries WHERE watcher_id = '<id>' ORDER BY timestamp DESC LIMIT 50"`
 4. Analyze the results in context of the watcher's description and previous findings.
 5. Report findings to the user.
-6. Update the watcher: call `watchers_update` with updated `findings` (append to existing), and a fresh `statusSummary`.
+6. `mw watchers update <id> --findings "<updated findings, appended to existing>" --status-summary "<fresh summary>"`.
 
 If multiple watchers have new data, work through them one at a time, starting with the most recently updated.
 
@@ -809,7 +847,7 @@ If multiple watchers have new data, work through them one at a time, starting wi
 
 ## Monitoring
 
-Moonwatch also provides real-time monitoring dashboards. You can set up metrics collection in the user's code, create dashboards, and add visualization cards — all via MCP.
+Moonwatch also provides real-time monitoring dashboards. You can set up metrics collection in the user's code (the SDK's `createMonitor`), then create dashboards and visualization cards with `mw monitoring …`.
 
 ### Monitoring Concepts
 
@@ -819,19 +857,19 @@ Moonwatch also provides real-time monitoring dashboards. You can set up metrics 
 - **Poll** — SDK calls a handler every 5s and pushes the result. Numbers go to ClickHouse (plottable), objects/arrays go to Valkey (snapshots).
 - **Event** — SDK records a tagged occurrence (e.g. API request). Stored in ClickHouse for aggregation/grouping.
 
-### Monitoring MCP Tools
+### Monitoring commands
 
-- **`monitoring_list_projects`** — List all monitoring projects the user can access.
-- **`monitoring_create_project`** — Create a new monitoring project. Requires write access. Returns the project ID for SDK setup.
-- **`monitoring_list_dashboards`** — List dashboards within a project.
-- **`monitoring_create_dashboard`** — Create a new dashboard. Requires write access.
-- **`monitoring_list_metrics`** — Discover available poll metrics, events, and snapshots for a project. **Call this first** to see what data exists before creating cards.
-- **`monitoring_query`** — Execute SQL against monitoring data (polls or events). Similar to `logs_query` but for monitoring tables.
-- **`monitoring_create_card`** — Create a card on a dashboard with full config.
-- **`monitoring_list_cards`** — List cards on a dashboard (id, type, title, position, source summary).
-- **`monitoring_get_card`** — Get a single card's full settings, including complete config JSON.
-- **`monitoring_update_card`** — Update an existing card's title, type, config, or position.
-- **`monitoring_delete_card`** — Delete a card from a dashboard.
+- **`mw monitoring projects list`** — List all monitoring projects you can access (with their workspace IDs).
+- **`mw monitoring projects create <name> --workspace <id>`** — Create a project (write+). Prints the project ID for SDK setup.
+- **`mw monitoring dashboards list --project <id>`** / **`mw monitoring dashboards create <name> --project <id>`** — List / create dashboards.
+- **`mw monitoring metrics --project <id>`** — Discover available poll metrics, events, and snapshots. **Run this first** to see what data exists before creating cards.
+- **`mw monitoring query <projectId> "<SQL>"`** — Run ClickHouse SQL against the monitoring tables (tenant/project scoping auto-injected). Like `mw logs query` but for `monitoring.*`.
+- **`mw monitoring cards list --dashboard <id>`** — List cards (id, type, title, position, source summary).
+- **`mw monitoring cards get <id>`** — Get a single card's full settings including complete config JSON.
+- **`mw monitoring cards create --dashboard <id> --type graph|table|keyval --title "…" --config '<json>' [--width N]`** — Create a card.
+- **`mw monitoring cards update <id> [--title …] [--config '<json>'] [--type …] [--w N] [--h N] [--x N] [--y N]`** — Update a card.
+- **`mw monitoring cards delete <id>`** — Delete a card.
+- **`mw monitoring data delete --project <id> --name <name> --type poll|event|snapshot`** — Delete a data source (manager+).
 
 ### Setting Up Monitoring in User Code
 
@@ -841,8 +879,8 @@ When the user wants to monitor their application, set up the SDK's monitoring AP
 import { createMonitor } from '@moonwatch/js';
 
 const metrics = createMonitor({
-  projectId: '<uuid>',  // from monitoring_list_projects
-  apiKey: '<workspace-api-key>',  // same key used for logging
+  projectId: '<uuid>',  // from `mw monitoring projects list`
+  apiKey: '<workspace-api-key>',  // same key used for logging (`mw logs key <logFileId>`)
 });
 
 // Numeric polls — plottable as line charts
@@ -874,71 +912,35 @@ metrics.event('api_request', {
 });
 ```
 
-### Creating Dashboard Cards via MCP
+### Creating Dashboard Cards
 
-After data is flowing, create visualizations:
+After data is flowing, create visualizations with `mw monitoring cards create`. `--config` takes a JSON object string (single-quote it so the shell leaves it alone):
 
-```
-// Graph card — single poll metric
-monitoring_create_card({
-  dashboardId: "<id>",
-  type: "graph",
-  title: "CPU Load",
-  config: {
-    "series": [{ "source": "poll", "metric": "cpu.load", "aggregation": "avg", "color": "#007acc" }]
-  }
-})
+```bash
+# Graph card — single poll metric
+mw monitoring cards create --dashboard <id> --type graph --title "CPU Load" \
+  --config '{"series":[{"source":"poll","metric":"cpu.load","aggregation":"avg","color":"#007acc"}]}'
 
-// Graph card — event with aggregation
-monitoring_create_card({
-  dashboardId: "<id>",
-  type: "graph",
-  title: "Request Rate",
-  config: {
-    "series": [{ "source": "event", "event": "api_request", "aggregation": "rate", "color": "#3fb950" }]
-  }
-})
+# Graph card — event with aggregation
+mw monitoring cards create --dashboard <id> --type graph --title "Request Rate" \
+  --config '{"series":[{"source":"event","event":"api_request","aggregation":"rate","color":"#3fb950"}]}'
 
-// Multi-series graph — correlate metrics
-monitoring_create_card({
-  dashboardId: "<id>",
-  type: "graph",
-  title: "Requests vs Response Time",
-  config: {
-    "series": [
-      { "source": "event", "event": "api_request", "aggregation": "count", "color": "#007acc" },
-      { "source": "event", "event": "api_request", "aggregation": "avg", "valueTag": "duration", "color": "#f0883e" }
-    ],
-    "yAxisMode": "independent"
-  },
-  width: 6
-})
+# Multi-series graph — correlate metrics (wider card)
+mw monitoring cards create --dashboard <id> --type graph --title "Requests vs Response Time" --width 6 \
+  --config '{"series":[{"source":"event","event":"api_request","aggregation":"count","color":"#007acc"},{"source":"event","event":"api_request","aggregation":"avg","valueTag":"duration","color":"#f0883e"}],"yAxisMode":"independent"}'
 
-// Event table — top endpoints
-monitoring_create_card({
-  dashboardId: "<id>",
-  type: "table",
-  title: "Top Endpoints",
-  config: {
-    "source": "event",
-    "event": "api_request",
-    "groupBy": "endpoint",
-    "aggregation": "count",
-    "period": 3600,
-    "limit": 10
-  }
-})
+# Event table — top endpoints
+mw monitoring cards create --dashboard <id> --type table --title "Top Endpoints" \
+  --config '{"source":"event","event":"api_request","groupBy":"endpoint","aggregation":"count","period":3600,"limit":10}'
 
-// Key/value card — snapshot
-monitoring_create_card({
-  dashboardId: "<id>",
-  type: "keyval",
-  title: "System Info",
-  config: { "source": "snapshot", "snapshot": "system" }
-})
+# Key/value card — snapshot
+mw monitoring cards create --dashboard <id> --type keyval --title "System Info" \
+  --config '{"source":"snapshot","snapshot":"system"}'
 ```
 
 ### Monitoring Query Examples
+
+Run each via `mw monitoring query <projectId> "<SQL>"`:
 
 ```sql
 -- Recent poll values
@@ -985,11 +987,11 @@ tags Map(String, String)
 
 When a user asks to set up monitoring:
 
-1. **Check existing projects** — `monitoring_list_projects`
-2. **If no project exists** — create one with `monitoring_create_project` (needs workspace ID from `logs_list_log_files` output)
-3. **Get the workspace API key** — `logs_get_workspace_key` (same key used for logging)
+1. **Check existing projects** — `mw monitoring projects list`
+2. **If no project exists** — `mw monitoring projects create <name> --workspace <id>` (workspace ID from `mw monitoring projects list` / `mw logs files` / `mw whoami`)
+3. **Get the workspace API key** — `mw logs key <logFileId>` (same key used for logging)
 4. **Set up SDK code** — add `createMonitor({ projectId, apiKey })` with polls and events for the metrics they want
-5. **Create a dashboard** — `monitoring_create_dashboard`
-6. **Add cards** — `monitoring_create_card` for each visualization
-7. **Check available data** — `monitoring_list_metrics` once data starts flowing
-8. **Verify** — `monitoring_query` to confirm data is being stored
+5. **Create a dashboard** — `mw monitoring dashboards create <name> --project <id>`
+6. **Add cards** — `mw monitoring cards create …` for each visualization
+7. **Check available data** — `mw monitoring metrics --project <id>` once data starts flowing
+8. **Verify** — `mw monitoring query <projectId> "…"` to confirm data is being stored

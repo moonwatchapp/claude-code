@@ -8,4 +8,4 @@ user_invocable: true
 
 Read `../moonwatch/references/moonwatch-guide.md`, then follow the `## Monitoring` section.
 
-Before using Moonwatch commands, check `command -v mw`. If it is missing, ask once to install globally with `npm install -g @moonwatch/cli`; if that fails or is declined, use `npx -y @moonwatch/cli@latest` as the command prefix.
+Use `npx -y @moonwatch/cli@latest` for every Moonwatch CLI command. Do not check for, install, or use a global CLI binary.
